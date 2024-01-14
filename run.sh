@@ -1,10 +1,8 @@
 #!/bin/bash
-# bash run.sh <service-name>
+# Setting up ingress controller with self-signed certificate 
+# run.sh my-service-name
 
-wget https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml 
-kubectl label nodes controlplane ingress-ready="true"
-kubectl apply -f deploy.yaml 
-kubectl wait --for=condition=ready pod -n ingress-nginx -l app.kubernetes.io/component=controller
+# Generate the keys & certificates
 
 ENV_ROOT_DOMAIN=127.0.0.1.nip.io
 
@@ -34,25 +32,35 @@ DNS.1 = *.$ENV_ROOT_DOMAIN
 EOF
 
 #Sign Client csr and generate crt
-
 openssl x509 -req -CA $ROOT_CERT_DIR/rootCA.crt -CAkey $ROOT_CERT_DIR/rootCA.key \
                   -days 365  -set_serial 01 -CAcreateserial -extfile $ROOT_CERT_DIR/domain.ext \
                   -in $SERVICE_CERT_DIR/${SERVICE_NAME}.csr -out $SERVICE_CERT_DIR/${SERVICE_NAME}.crt
 
 
+
+# Install nginx ingress controller 
+wget https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml 
+kubectl label nodes controlplane ingress-ready="true"
+kubectl apply -f deploy.yaml 
+kubectl wait --for=condition=ready pod -n ingress-nginx -l app.kubernetes.io/component=controller
+
+
 # Deploy http-echo:0.2.3 service (pod,svc,ing)
-kubectl run $SERVICE_NAME --image hashicorp/http-echo:0.2.3 -- -text="Hello $SERVICE_NAME"
-kubectl expose pod $SERVICE_NAME --port 5678
-kubectl create secret generic ${SERVICE_NAME}-tls \
+NS=default
+kubectl run -n $NS $SERVICE_NAME  --image hashicorp/http-echo:0.2.3 -- -text="Hello $SERVICE_NAME"
+kubectl expose pod -n $NS $SERVICE_NAME --port 5678
+kubectl create secret generic -n $NS ${SERVICE_NAME}-tls \
             --from-file=tls.crt=$SERVICE_CERT_DIR/${SERVICE_NAME}.crt \
             --from-file=tls.key=$SERVICE_CERT_DIR/${SERVICE_NAME}.key \
             --from-file=ca.crt=$ROOT_CERT_DIR/rootCA.crt  -o yaml --dry-run=client > ${SERVICE_NAME}/secret.yaml
-NS=default
+
+# Create the ingress and tls secrets 
 cat > ${SERVICE_NAME}/ing.yaml <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ${SERVICE_NAME}
+  namespace: $NS
   annotations:
     nginx.ingress.kubernetes.io/auth-tls-verify-client: "on"
     nginx.ingress.kubernetes.io/auth-tls-secret: "${NS}/${SERVICE_NAME}-tls"
@@ -77,9 +85,9 @@ spec:
       - ${SERVICE_NAME}.$ENV_ROOT_DOMAIN
     secretName: ${SERVICE_NAME}-tls
 EOF
-kubectl apply -f ${SERVICE_NAME}/secret.yaml
-kubectl apply -f ${SERVICE_NAME}/ing.yaml
+kubectl apply -n $NS -f ${SERVICE_NAME}/secret.yaml
+kubectl apply -n $NS -f ${SERVICE_NAME}/ing.yaml
 
+# Test the service 
 echo curl -L --cacert $ROOT_CERT_DIR/rootCA.crt  --key $SERVICE_CERT_DIR/${SERVICE_NAME}.key  --cert $SERVICE_CERT_DIR/${SERVICE_NAME}.crt  https://${SERVICE_NAME}.$ENV_ROOT_DOMAIN
-
 echo "127.0.0.1 ${SERVICE_NAME}.$ENV_ROOT_DOMAIN" >> /etc/hosts
