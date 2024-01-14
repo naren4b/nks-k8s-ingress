@@ -9,7 +9,9 @@ ENV_ROOT_DOMAIN=127.0.0.1.nip.io
 ROOT_CERT_DIR="/tmp/mycrts"
 mkdir -p $ROOT_CERT_DIR
 
-SERVICE_NAME=$1
+default_value="demo"
+SERVICE_NAME=$1 # Give the service name 
+SERVICE_NAME=${SERVICE_NAME:-$default_value}
 mkdir -p $SERVICE_NAME
 
 SERVICE_CERT_DIR=$ROOT_CERT_DIR/$SERVICE_NAME
